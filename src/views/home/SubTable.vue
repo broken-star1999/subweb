@@ -12,16 +12,11 @@
       {{ formMessage.text }}
     </div>
 
-    <section class="source-editor" aria-label="JMS 洛杉矶适配">
-      <h3>JMS 洛杉矶套餐适配</h3>
-      <p class="field-hint">使用部署者配置的订阅和流量 API，套用 Aethersailor 重度分流。原始订阅会发送至 Aethersailor 公共后端。</p>
-      <div class="field">
-        <label for="jms-token">私人订阅令牌</label>
-        <input id="jms-token" v-model.trim="jmsToken" type="password" autocomplete="off" spellcheck="false" />
-      </div>
-      <button type="button" class="secondary-button" @click="copyJmsLink">复制 JMS 适配订阅</button>
-      <p class="field-hint">流量日期表示下次重置，客户端可能显示为到期时间。</p>
-    </section>
+    <div class="field">
+      <label for="jms-bandwidth">JMS 流量 API 地址（可选）</label>
+      <input id="jms-bandwidth" v-model.trim="jmsBandwidth" type="password" autocomplete="off" spellcheck="false" @input="clearGeneratedResults" />
+      <span class="field-hint">单条 JMS 洛杉矶 Clash 订阅自动适配；填写 API 后附加用量和重置日期。请使用 Aethersailor 公共后端。生成链接包含原始地址，请妥善保管。</span>
+    </div>
 
     <div v-if="!isSubConverterExtended" class="field">
       <label for="subscription-urls">订阅链接或节点</label>
@@ -449,7 +444,8 @@ export default {
         shortUrl: '',
       },
       urls: '',
-      jmsToken: '',
+      jmsBandwidth: '',
+      jmsUpstream: '',
       target: 'clash',
       remoteConfig: runtimeConfig.remoteConfigOptions[0]?.value || '',
       isShortUrlLoading: false,
@@ -577,13 +573,6 @@ export default {
     },
   },
   methods: {
-    copyJmsLink() {
-      if (!/^[A-Za-z0-9_-]{32,128}$/.test(this.jmsToken)) {
-        this.setFormMessage('请输入部署时设置的私人订阅令牌。');
-        return;
-      }
-      this.toCopy(`${window.location.origin}/jms/${encodeURIComponent(this.jmsToken)}`, 'JMS 订阅链接');
-    },
     initBackendOptions() {
       this.backendOptions = this.runtimeConfig.apiBackends;
       if (this.backendOptions.length > 0) {
@@ -864,6 +853,26 @@ export default {
           moreConfig: this.moreConfig,
           backendType: this.backendType,
         });
+        this.jmsUpstream = '';
+        const candidates = this.isSubConverterExtended
+          ? this.sourceItems.map(item => String(item.url || '').trim()).filter(Boolean)
+          : this.urls.split(/\r?\n|\|/).map(item => item.trim()).filter(Boolean);
+        const isJms = value => { try { const u = new URL(value); return ['jmssub.net', 'jjsubmarines.com'].includes(u.hostname) && u.pathname === '/members/getsub.php'; } catch { return false; } };
+        const hasJms = candidates.some(isJms);
+        if (this.jmsBandwidth && (!hasJms || this.target !== 'clash')) throw new TypeError('流量 API 仅用于单条 JMS 洛杉矶 Clash 订阅。');
+        if (hasJms && this.target === 'clash') {
+          if (candidates.length !== 1) throw new TypeError('JMS 洛杉矶适配目前仅支持单条订阅。');
+          const source = new URL(candidates[0]);
+          if (source.searchParams.get('format') !== 'clash') throw new TypeError('请使用 JMS 的 Clash / Mihomo YAML 订阅地址。');
+          const upstream = new URL(this.result.subUrl);
+          if (upstream.origin !== 'https://api.asailor.org') throw new TypeError('JMS 洛杉矶适配请使用 Aethersailor 公共后端。');
+          upstream.searchParams.set('udp', 'true');
+          this.jmsUpstream = upstream.href;
+          const local = new URL('/jms/convert', window.location.origin);
+          local.searchParams.set('converter', upstream.href);
+          if (this.jmsBandwidth) local.searchParams.set('bandwidth', this.jmsBandwidth);
+          this.result.subUrl = local.href;
+        }
       } catch (error) {
         this.setFormMessage(error.message, 'urls');
         return false;
@@ -880,7 +889,7 @@ export default {
         return;
       }
       if (!this.getConverter()) return;
-      const diagnosticUrl = new URL(this.result.subUrl);
+      const diagnosticUrl = new URL(this.jmsUpstream || this.result.subUrl);
       diagnosticUrl.searchParams.set('explain', 'true');
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 15000);

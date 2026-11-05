@@ -1,30 +1,27 @@
-# JMS 洛杉矶适配（实验版）
+# JMS 洛杉矶适配（开发测试版）
 
-基于 Aethersailor/subweb 原有 Cloudflare Pages 部署，普通转换流程保持原有逻辑。JMS 部分使用 Pages Functions，不能直接作为纯静态站点使用。
+本项目保留 SubWeb 普通转换操作。在原有来源中输入单条 JMS Clash/Mihomo 订阅，目标选择 Clash/Mihomo，后端选择 Aethersailor 公共后端；页面识别 JMS 地址后自动生成洛杉矶适配链接。JMS 流量 API 字段可留空：留空仍然适配节点分组；填写后增加流量和重置日期表头。
 
-## 配置
+服务地址本身不能可靠区分 JMS 套餐地区，当前识别的 JMS 订阅会按洛杉矶规则处理，其他套餐不得使用该适配。当前仅支持单条 JMS 来源，支持目标、模板和其他前端选项需以实际测试为准。
 
-创建隔离的 Pages 测试项目并配置 secrets：
+## 部署与隐私
 
-- `JMS_ACCESS_TOKEN`：使用安全随机数生成的 32–128 位 URL 安全令牌。
-- `JMS_SUBSCRIPTION_URL`：JMS 的 Clash YAML 订阅地址，必须为 jmssub.net 或 jjsubmarines.com HTTPS 地址。
-- `JMS_BANDWIDTH_URL`：JMS bandwidth counter 的 justmysocks6.net HTTPS 地址。
+不需要 KV 或管理密钥。Pages 仍按 `DEPLOY_CLOUDFLARE.md` 使用 `npm run build` 和 `dist`，部署 `functions/`；`/jms/*` 路由交由 Pages Functions。
 
-不要将实际值写入代码、公开仓库、构建日志或测试数据。每个预览环境应使用单独令牌和测试凭据；不要向公共预览部署输入生产 Secret。按上游 `DEPLOY_CLOUDFLARE.md` 通过 `npm ci` 和 `npm run build` 构建，输出 `dist`，Pages Functions 从 `functions/` 构建。Pages 路由已包含 `/jms/*`。
+与传统转换链接类似，生成链接的查询参数包含编码后的原始订阅地址和流量 API 地址；编码不是加密，获取链接即可还原。浏览器历史、客户端、Cloudflare 日志、短链服务等可能接触链接；使用短链会将完整链接交给短链服务。上游公共转换后端会收到原始订阅，但不会收到单独传入的流量 API。代码不主动记录 URL，不能因此保证平台访问日志不会记录。配置限流，避免公开接口被滥用。
 
-在网页的 JMS 区域输入令牌并复制地址。此链接及其中的令牌应视为密码。生成的配置由公共 Aethersailor 后端转换，原始订阅地址会发给该后端。流量 API 不传给公共后端。配置内 provider 指向此服务，访问令牌同样会出现在 provider URL；客户端可获得节点凭据。使用时务必限制访问并检查 Cloudflare/客户端日志。
+原始订阅是代理集来源，客户端下载的 YAML 可包含原始订阅地址。本站不保存配置，因此不能单独撤销链接；源凭据泄露时应在 JMS 重置服务密码/UUID，并更新所有相关客户端。
 
-## 功能与限制
+## 技术说明与限制
 
-- 固定使用 Aethersailor Custom_Clash_Full 模板，原版普通转换页面仍可选择其他模板。JMS 模式当前不读取页面上的其他选项。
-- 依据 `JMS_Full_Node_Adapter_v2.conf` 调整分组和 UDP；不影响路由器其他覆写。s4/s5 名称延续现有习惯，不能据此证明最终出口地区。
-- 流量 API 返回合计用量，没有上下载拆分；以 `upload=0; download=合计` 适配客户端显示，不表示实际没有上传。重置日 1–28 按美国洛杉矶当地零点估算下一次日期并写入 expire，可能被客户端标为到期日；29–31 日暂不输出日期。API 不可用时不输出用量表头。
-- 不接受来自网页的任意上游地址；上游地址只来自部署者设置的 Secret，并限制主机名。禁止重定向。生成配置不应包含原始订阅地址；实际部署前仍须验证完整输出和上游响应。
-- 无法保证各客户端、地区网络和 Cloudflare 免费 CPU 限制下均可用。未经真实设备和 Cloudflare 预览环境测试，不应替换现有订阅。上线前检查用户认证、日志/追踪脱敏、上游规则和失败回退。
+- JMS Clash 转换请求保留原版选择的后端参数和模板，并显式设置 UDP 覆写；依照现有模块适配 s2/s3、s4、s5 和 s801。名称沿用现有配置，不证明实际出口地区。
+- 输入 URL 和上游后端限制为允许的 HTTPS 主机和路径，HTTP 重定向不跟随。使用有界响应读取，且不允许将流量 API 传给后端。
+- API 无上下载拆分：`upload=0; download=合计` 仅为显示总量。每月第 1–28 日以洛杉矶时间零点估算下次重置并写入 `expire`，客户端可能标为到期日；29–31 日暂不输出日期。API 失败时不构造流量头。
+- 尚未在 Cloudflare 预览环境验证当前版本，未用真实订阅验证节点、UDP 或两款客户端，亦未验证所有模板/转换选项；勿替换现有生产订阅。
 
 ## 本地验证
 
-```
+```sh
 npm ci
 npm run build
 node --test tests/jms.test.js

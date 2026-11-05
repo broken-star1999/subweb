@@ -1,12 +1,15 @@
 # Cloudflare Pages 部署指南
 
-SubWeb 以 Cloudflare Pages 为主要部署平台。Pages 提供静态前端和运行时配置接口；订阅转换仍由浏览器直接请求所选的 SubConverter 或 SubConverter-Extended 后端。
+本分支在上游 SubWeb 基础上增加了 JMS 洛杉矶适配。Cloudflare Pages 托管前端和 Pages Functions；普通转换仍由浏览器请求所选后端，JMS 适配请求则由本站 Functions 处理并调用 Aethersailor 公共后端。
+
+> 本指南描述当前开发分支，JMS 网页生成流程仍在测试。生产站点以实际部署的分支和提交为准。JMS 输入方式、安全边界和测试说明请阅读 [JMS-SETUP.md](JMS-SETUP.md)。
 
 ## 部署边界
 
 - Cloudflare Pages 托管 Vue 静态资源。
-- Pages Function 只处理 `/conf/config.js`，用于读取环境变量并生成站点配置。
-- Pages Function 不代理订阅转换，不接收订阅地址或节点。
+- `/conf/config.js` 用于读取公开的站点环境变量并生成前端配置；不要把敏感信息放入这些前端配置变量。
+- `/jms/*` 处理 JMS 订阅生成，涉及敏感地址和节点数据。普通转换与该入口分开。
+- JMS 原始订阅地址会发送给 Aethersailor 公共后端；Bandwidth Counter API 由本站查询。生成的订阅链接也是凭据。
 - 短链接功能会把完整转换链接发送到单独配置的短链接服务，默认关闭。
 - Docker 部署仍受支持，但不是本指南的主要部署方式。
 
@@ -18,7 +21,7 @@ SubWeb 以 Cloudflare Pages 为主要部署平台。Pages 提供静态前端和�
 2. 在 Cloudflare Dashboard 中进入 **Workers & Pages**。
 3. 创建 Pages 项目并选择 **Connect to Git**。
 4. 选择 Fork 后的仓库。
-5. 将生产分支设置为 `main`。
+5. 选择希望部署的分支。当前 fork 的生产分支为 `develop`；不要将未验收的功能分支直接视为生产版本。
 
 Pages 构建设置如下：
 
@@ -130,13 +133,14 @@ Pages 可以为同仓库分支和 Pull Request 创建独立预览部署。预览
 4. 如果 Function 不可用，浏览器请求 `/conf/config_static.js`。
 5. 如果两个配置都不可用，前端进入安全手动模式。
 
-`public/_routes.json` 只让 `/conf/config.js` 调用 Pages Function。其他页面和指纹资源由 Pages 直接提供。
+`public/_routes.json` 让 `/conf/config.js` 和 `/jms/*` 调用 Pages Functions。其他页面和指纹资源由 Pages 直接提供。
 
 ## 隐私和安全
 
 - 转换链接可能包含订阅凭据。不要把链接、诊断 JSON 或浏览器日志公开粘贴到 Issue。
 - SubConverter-Extended 诊断会立即把当前来源发送到所选后端，因此前端会在请求前确认。
 - Base64 是编码，不是加密。
+- JMS 订阅链接参数包含原始地址，编码不是加密；本站不存储配置，也不能单独撤销链接。详见 [JMS-SETUP.md](JMS-SETUP.md)。
 - `provider_headers` 只填写 Header 名称。SubWeb 不收集或保存 Header 值。
 - 短链接服务会收到完整转换链接。只在信任该服务时启用。
 - 不要为绕过 CORS 而使用 Pages Function 代理任意后端。

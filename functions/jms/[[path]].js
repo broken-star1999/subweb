@@ -1,19 +1,8 @@
 import { load, dump } from 'js-yaml';
 
-const TEMPLATE = 'https://raw.githubusercontent.com/Aethersailor/Custom_OpenClash_Rules/refs/heads/main/cfg/Custom_Clash_Full.ini';
 const REMOVED = new Set(['🇭🇰 香港节点','🇸🇬 新加坡节点','🇼🇸 台湾节点','🇹🇼 台湾节点','🇰🇷 韩国节点','🇨🇦 加拿大节点','🇬🇧 英国节点','🇫🇷 法国节点','🇩🇪 德国节点','🇹🇷 土耳其节点','🇷🇺 俄罗斯节点','🌐 其他地区','🏠 家宽节点']);
 const GROUPS = [['🇺🇸 美国节点','s[23][.]'],['🇯🇵 日本节点','s4[.]'],['🇳🇱 荷兰节点','s5[.]'],['🐢 低倍率节点','s801[.]']];
 const NO_STORE = { 'Cache-Control': 'no-store, private', 'X-Content-Type-Options': 'nosniff' };
-
-async function sameSecret(a, b) {
-  if (!a || !b) return false;
-  const enc = new TextEncoder();
-  const [x, y] = await Promise.all([crypto.subtle.digest('SHA-256', enc.encode(a)), crypto.subtle.digest('SHA-256', enc.encode(b))]);
-  const left = new Uint8Array(x), right = new Uint8Array(y);
-  let diff = 0;
-  for (let i = 0; i < left.length; i++) diff |= left[i] ^ right[i];
-  return diff === 0;
-}
 
 function trusted(raw, hosts) {
   const u = new URL(raw);
@@ -22,7 +11,8 @@ function trusted(raw, hosts) {
 }
 
 async function readLimited(response, max = 1024 * 1024) {
-  if (!response.ok || !response.body) throw new Error('upstream failed');
+  if (!response.ok) throw new Error(`upstream-http-${response.status}`);
+  if (!response.body) throw new Error('upstream-empty');
   const reader = response.body.getReader();
   const parts = []; let length = 0;
   while (true) {
@@ -55,13 +45,11 @@ function resetTime(day, now = new Date()) {
   return Math.floor(candidate / 1000);
 }
 
-export function adapt(config, providerUrl) {
+export function adapt(config) {
   if (!config || typeof config !== 'object' || !config['proxy-providers'] || !Array.isArray(config['proxy-groups'])) throw new Error('unexpected configuration');
   const providers = config['proxy-providers'];
   const keys = Object.keys(providers);
   if (keys.length !== 1) throw new Error('unexpected provider count');
-  for (const p of Object.values(providers)) { p.url = providerUrl; p.override = { ...(p.override || {}), udp: true }; }
-  config.proxies = (config.proxies || []).map(p => ['vless', 'ss'].includes(p.type) ? { ...p, udp: true } : p);
   let groups = config['proxy-groups'].filter(g => !REMOVED.has(g.name)).map(g => Array.isArray(g.proxies) ? { ...g, proxies: g.proxies.filter(n => !REMOVED.has(n)) } : g);
   for (const [name, filter] of GROUPS) {
     let group = groups.find(g => g.name === name);
@@ -74,30 +62,35 @@ export function adapt(config, providerUrl) {
 }
 
 export async function onRequest(context) {
-  const { request, env, params } = context;
+  const { request, params } = context;
   const parts = Array.isArray(params.path) ? params.path : [params.path].filter(Boolean);
-  if (!['GET', 'HEAD'].includes(request.method) || parts.length < 1 || parts.length > 2 || (parts[1] && parts[1] !== 'provider')) return new Response('Not found', { status: 404, headers: NO_STORE });
-  if (!/^[A-Za-z0-9_-]{32,128}$/.test(env.JMS_ACCESS_TOKEN || '') || !(await sameSecret(parts[0], env.JMS_ACCESS_TOKEN))) return new Response('Not found', { status: 404, headers: NO_STORE });
+  if (!['GET', 'HEAD'].includes(request.method) || parts.length !== 1 || parts[0] !== 'convert') return new Response('Not found', { status: 404, headers: NO_STORE });
+  let converter, source, api;
   try {
-    const source = trusted(env.JMS_SUBSCRIPTION_URL, ['jmssub.net', 'jjsubmarines.com']);
-    const api = trusted(env.JMS_BANDWIDTH_URL, ['justmysocks6.net']);
-    const origin = new URL(request.url).origin;
-    const providerUrl = `${origin}/jms/${encodeURIComponent(parts[0])}/provider`;
-    if (parts[1] === 'provider') {
-      const result = await fetch(source.toString(), { redirect: 'error', headers: { 'User-Agent': 'clash-verge/v2.4.5' } });
-      const body = await readLimited(result);
-      return new Response(request.method === 'HEAD' ? null : body, { headers: { ...NO_STORE, 'Content-Type': 'text/yaml; charset=utf-8' } });
-    }
-    const converter = new URL('https://api.asailor.org/sub');
-    converter.search = new URLSearchParams({ target: 'clash', url: source.toString(), config: TEMPLATE }).toString();
+    const incoming = new URL(request.url);
+    converter = trusted(incoming.searchParams.get('converter'), ['api.asailor.org']);
+    const sourceArg = converter.searchParams.get('url') || '';
+    const sourceIndex = sourceArg.indexOf('https://');
+    const prefix = sourceArg.slice(0, sourceIndex);
+    if (sourceIndex < 0 || sourceArg.includes('|') || !/^(?:(?:tag|provider|interval|proxy_direct):[^,\r\n]+,)*$/.test(prefix)) return new Response('Invalid JMS source', { status: 400, headers: NO_STORE });
+    source = trusted(sourceArg.slice(sourceIndex), ['jmssub.net', 'jjsubmarines.com']);
+    const bandwidth = incoming.searchParams.get('bandwidth');
+    api = bandwidth ? trusted(bandwidth, ['justmysocks6.net']) : null;
+    if (converter.pathname !== '/sub' || converter.searchParams.get('target') !== 'clash' || source.pathname !== '/members/getsub.php' || source.searchParams.get('format') !== 'clash' || (api && api.pathname !== '/members/getbwcounter.php')) return new Response('Invalid JMS addresses', { status: 400, headers: NO_STORE });
+    converter.searchParams.set('udp', 'true');
+  } catch {
+    return new Response('Invalid JMS addresses', { status: 400, headers: NO_STORE });
+  }
+  try {
     const [converted, usage] = await Promise.allSettled([
-      fetch(converter.toString(), { redirect: 'error' }).then(r => readLimited(r)),
-      fetch(api.toString(), { redirect: 'error' }).then(r => readLimited(r, 16384)).then(JSON.parse),
+      fetch(converter.toString(), { redirect: 'manual' }).then(r => readLimited(r)),
+      api ? fetch(api.toString(), { redirect: 'manual' }).then(r => readLimited(r, 16384)).then(JSON.parse) : Promise.resolve(null),
     ]);
     if (converted.status !== 'fulfilled') throw new Error('conversion failed');
-    const config = adapt(load(converted.value), providerUrl);
+    const config = adapt(load(converted.value));
+    if (!Object.values(config['proxy-providers']).every(p => p.override?.udp === true)) throw new Error('UDP override missing');
     const headers = { ...NO_STORE, 'Content-Type': 'text/yaml; charset=utf-8' };
-    if (usage.status === 'fulfilled') {
+    if (usage.status === 'fulfilled' && usage.value && typeof usage.value === 'object') {
       const { monthly_bw_limit_b: total, bw_counter_b: used, bw_reset_day_of_month: day } = usage.value;
       if (Number.isSafeInteger(total) && total > 0 && Number.isSafeInteger(used) && used >= 0) {
         const reset = resetTime(day);
