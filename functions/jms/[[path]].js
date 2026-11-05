@@ -15,6 +15,27 @@ async function sameSecret(a, b) {
   return diff === 0;
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const hex = bytes => Array.from(bytes, x => x.toString(16).padStart(2, '0')).join('');
+const unhex = s => new Uint8Array((s.match(/../g) || []).map(x => parseInt(x, 16)));
+async function tokenId(token) { return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(token)))); }
+async function cipherKey(token) {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode('jms-encryption-v1:' + token));
+  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+async function seal(token, value) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await cipherKey(token), encoder.encode(JSON.stringify(value)));
+  return JSON.stringify({ version: 1, iv: hex(iv), data: hex(new Uint8Array(ciphertext)) });
+}
+async function unseal(token, value) {
+  const record = JSON.parse(value);
+  if (record.version !== 1 || !/^[0-9a-f]{24}$/.test(record.iv) || !/^[0-9a-f]+$/.test(record.data)) throw new Error('invalid record');
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unhex(record.iv) }, await cipherKey(token), unhex(record.data));
+  return JSON.parse(decoder.decode(plain));
+}
+
 function trusted(raw, hosts) {
   const u = new URL(raw);
   if (u.protocol !== 'https:' || !hosts.includes(u.hostname) || u.username || u.password || u.port) throw new Error('invalid configuration');
@@ -60,8 +81,7 @@ export function adapt(config, providerUrl) {
   const providers = config['proxy-providers'];
   const keys = Object.keys(providers);
   if (keys.length !== 1) throw new Error('unexpected provider count');
-  for (const p of Object.values(providers)) { p.url = providerUrl; p.override = { ...(p.override || {}), udp: true }; }
-  config.proxies = (config.proxies || []).map(p => ['vless', 'ss'].includes(p.type) ? { ...p, udp: true } : p);
+  for (const p of Object.values(providers)) p.url = providerUrl;
   let groups = config['proxy-groups'].filter(g => !REMOVED.has(g.name)).map(g => Array.isArray(g.proxies) ? { ...g, proxies: g.proxies.filter(n => !REMOVED.has(n)) } : g);
   for (const [name, filter] of GROUPS) {
     let group = groups.find(g => g.name === name);
@@ -76,11 +96,35 @@ export function adapt(config, providerUrl) {
 export async function onRequest(context) {
   const { request, env, params } = context;
   const parts = Array.isArray(params.path) ? params.path : [params.path].filter(Boolean);
-  if (!['GET', 'HEAD'].includes(request.method) || parts.length < 1 || parts.length > 2 || (parts[1] && parts[1] !== 'provider')) return new Response('Not found', { status: 404, headers: NO_STORE });
-  if (!/^[A-Za-z0-9_-]{32,128}$/.test(env.JMS_ACCESS_TOKEN || '') || !(await sameSecret(parts[0], env.JMS_ACCESS_TOKEN))) return new Response('Not found', { status: 404, headers: NO_STORE });
+  if (parts.length === 1 && parts[0] === 'manage' && request.method === 'POST') {
+    if (!env.JMS_CONFIGS || !/^[A-Za-z0-9_-]{32,128}$/.test(env.JMS_ADMIN_KEY || '')) return new Response('Service not configured', { status: 503, headers: NO_STORE });
+    if (request.headers.get('Origin') !== new URL(request.url).origin || !(await sameSecret(request.headers.get('X-JMS-Admin-Key'), env.JMS_ADMIN_KEY))) return new Response('Forbidden', { status: 403, headers: NO_STORE });
+    try {
+      if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new Error('invalid content type');
+      const body = await readLimited(new Response(request.body), 8192);
+      const input = JSON.parse(body);
+      const source = trusted(input.subscription, ['jmssub.net', 'jjsubmarines.com']);
+      const api = trusted(input.bandwidth, ['justmysocks6.net']);
+      if (source.pathname !== '/members/getsub.php' || api.pathname !== '/members/getbwcounter.php' || source.searchParams.get('format') !== 'clash') throw new Error('invalid input');
+      const token = hex(crypto.getRandomValues(new Uint8Array(32)));
+      await env.JMS_CONFIGS.put(await tokenId(token), await seal(token, { subscription: source.toString(), bandwidth: api.toString() }));
+      return Response.json({ token }, { status: 201, headers: NO_STORE });
+    } catch { return new Response('Unable to save configuration', { status: 400, headers: NO_STORE }); }
+  }
+  if (!['GET', 'HEAD', 'DELETE'].includes(request.method) || parts.length < 1 || parts.length > 2 || (parts[1] && parts[1] !== 'provider')) return new Response('Not found', { status: 404, headers: NO_STORE });
+  if (!/^[a-f0-9]{64}$/.test(parts[0]) || !env.JMS_CONFIGS) return new Response('Not found', { status: 404, headers: NO_STORE });
   try {
-    const source = trusted(env.JMS_SUBSCRIPTION_URL, ['jmssub.net', 'jjsubmarines.com']);
-    const api = trusted(env.JMS_BANDWIDTH_URL, ['justmysocks6.net']);
+    const id = await tokenId(parts[0]);
+    if (request.method === 'DELETE') {
+      if (parts.length !== 1 || request.headers.get('Origin') !== new URL(request.url).origin || !(await sameSecret(request.headers.get('X-JMS-Admin-Key'), env.JMS_ADMIN_KEY))) return new Response('Forbidden', { status: 403, headers: NO_STORE });
+      await env.JMS_CONFIGS.delete(id);
+      return new Response(null, { status: 204, headers: NO_STORE });
+    }
+    const stored = await env.JMS_CONFIGS.get(id);
+    if (!stored) return new Response('Not found', { status: 404, headers: NO_STORE });
+    const saved = await unseal(parts[0], stored);
+    const source = trusted(saved.subscription, ['jmssub.net', 'jjsubmarines.com']);
+    const api = trusted(saved.bandwidth, ['justmysocks6.net']);
     const origin = new URL(request.url).origin;
     const providerUrl = `${origin}/jms/${encodeURIComponent(parts[0])}/provider`;
     if (parts[1] === 'provider') {
@@ -89,13 +133,14 @@ export async function onRequest(context) {
       return new Response(request.method === 'HEAD' ? null : body, { headers: { ...NO_STORE, 'Content-Type': 'text/yaml; charset=utf-8' } });
     }
     const converter = new URL('https://api.asailor.org/sub');
-    converter.search = new URLSearchParams({ target: 'clash', url: source.toString(), config: TEMPLATE }).toString();
+    converter.search = new URLSearchParams({ target: 'clash', url: source.toString(), config: TEMPLATE, udp: 'true' }).toString();
     const [converted, usage] = await Promise.allSettled([
       fetch(converter.toString(), { redirect: 'error' }).then(r => readLimited(r)),
       fetch(api.toString(), { redirect: 'error' }).then(r => readLimited(r, 16384)).then(JSON.parse),
     ]);
     if (converted.status !== 'fulfilled') throw new Error('conversion failed');
     const config = adapt(load(converted.value), providerUrl);
+    if (!Object.values(config['proxy-providers']).every(p => p.override?.udp === true)) throw new Error('UDP override missing');
     const headers = { ...NO_STORE, 'Content-Type': 'text/yaml; charset=utf-8' };
     if (usage.status === 'fulfilled') {
       const { monthly_bw_limit_b: total, bw_counter_b: used, bw_reset_day_of_month: day } = usage.value;
