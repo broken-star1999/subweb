@@ -115,6 +115,7 @@ export async function onRequest(context) {
   if (!['GET', 'HEAD', 'DELETE'].includes(request.method) || parts.length < 1 || parts.length > 2 || (parts[1] && parts[1] !== 'provider')) return new Response('Not found', { status: 404, headers: NO_STORE });
   if (!/^[a-f0-9]{64}$/.test(parts[0]) || !env.JMS_CONFIGS) return new Response('Not found', { status: 404, headers: NO_STORE });
   let stage = 'configuration';
+  let previewDetail = '';
   try {
     const id = await tokenId(parts[0]);
     if (request.method === 'DELETE') {
@@ -145,6 +146,7 @@ export async function onRequest(context) {
     ]);
     if (converted.status !== 'fulfilled') {
       const message = converted.reason?.message || '';
+      previewDetail = String(message).replace(/https?:\/\/\S+/gi, '[URL]').replace(/[^a-zA-Z0-9 .:_-]/g, '').slice(0, 100);
       stage = /^upstream-http-\d{3}$/.test(message) ? message : 'upstream-network-or-body';
       throw new Error('conversion failed');
     }
@@ -162,6 +164,6 @@ export async function onRequest(context) {
     stage = 'serialize';
     return new Response(request.method === 'HEAD' ? null : dump(config, { noRefs: true, lineWidth: -1 }), { headers });
   } catch {
-    return new Response('JMS subscription temporarily unavailable', { status: 502, headers: env.JMS_PREVIEW_DIAGNOSTICS === 'true' ? { ...NO_STORE, 'X-JMS-Stage': stage } : NO_STORE });
+    return new Response('JMS subscription temporarily unavailable', { status: 502, headers: env.JMS_PREVIEW_DIAGNOSTICS === 'true' ? { ...NO_STORE, 'X-JMS-Stage': stage, 'X-JMS-Debug': previewDetail } : NO_STORE });
   }
 }
