@@ -1,5 +1,5 @@
 {
   "version": 1,
-  "include": ["/conf/config.js"],
+  "include": ["/conf/config.js", "/jms/*"],
   "exclude": []
 }

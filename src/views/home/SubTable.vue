@@ -12,6 +12,17 @@
       {{ formMessage.text }}
     </div>
 
+    <section class="source-editor" aria-label="JMS 洛杉矶适配">
+      <h3>JMS 洛杉矶套餐适配</h3>
+      <p class="field-hint">使用部署者配置的订阅和流量 API，套用 Aethersailor 重度分流。原始订阅会发送至 Aethersailor 公共后端。</p>
+      <div class="field">
+        <label for="jms-token">私人订阅令牌</label>
+        <input id="jms-token" v-model.trim="jmsToken" type="password" autocomplete="off" spellcheck="false" />
+      </div>
+      <button type="button" class="secondary-button" @click="copyJmsLink">复制 JMS 适配订阅</button>
+      <p class="field-hint">流量日期表示下次重置，客户端可能显示为到期时间。</p>
+    </section>
+
     <div v-if="!isSubConverterExtended" class="field">
       <label for="subscription-urls">订阅链接或节点</label>
       <textarea
@@ -438,6 +449,7 @@ export default {
         shortUrl: '',
       },
       urls: '',
+      jmsToken: '',
       target: 'clash',
       remoteConfig: runtimeConfig.remoteConfigOptions[0]?.value || '',
       isShortUrlLoading: false,
@@ -565,6 +577,13 @@ export default {
     },
   },
   methods: {
+    copyJmsLink() {
+      if (!/^[A-Za-z0-9_-]{32,128}$/.test(this.jmsToken)) {
+        this.setFormMessage('请输入部署时设置的私人订阅令牌。');
+        return;
+      }
+      this.toCopy(`${window.location.origin}/jms/${encodeURIComponent(this.jmsToken)}`, 'JMS 订阅链接');
+    },
     initBackendOptions() {
       this.backendOptions = this.runtimeConfig.apiBackends;
       if (this.backendOptions.length > 0) {
