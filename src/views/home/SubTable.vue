@@ -12,25 +12,11 @@
       {{ formMessage.text }}
     </div>
 
-    <section class="source-editor" aria-label="JMS 洛杉矶适配">
-      <h3>JMS 洛杉矶套餐适配</h3>
-      <p class="field-hint">原始订阅会发送至 Aethersailor 公共后端；流量 API 仅由本站查询。生成的链接可获取节点，请妥善保存。</p>
-      <div class="field">
-        <label for="jms-subscription">JMS Clash / Mihomo 原始订阅地址</label>
-        <input id="jms-subscription" v-model.trim="jmsSubscription" type="password" autocomplete="off" spellcheck="false" />
-      </div>
-      <div class="field">
-        <label for="jms-bandwidth">JMS 流量 API 地址</label>
-        <input id="jms-bandwidth" v-model.trim="jmsBandwidth" type="password" autocomplete="off" spellcheck="false" />
-      </div>
-      <div class="field">
-        <label for="jms-admin">管理密钥</label>
-        <input id="jms-admin" v-model.trim="jmsAdmin" type="password" autocomplete="off" spellcheck="false" />
-      </div>
-      <button type="button" class="secondary-button" :disabled="jmsLoading" @click="createJmsLink">生成并复制 JMS 订阅</button>
-      <div class="field"><label for="jms-result">生成的订阅链接（也可粘贴已有链接以撤销）</label><input id="jms-result" v-model.trim="jmsLink" autocomplete="off" spellcheck="false" /><button v-if="jmsLink" type="button" class="text-button" @click="deleteJmsLink">撤销此链接</button></div>
-      <p class="field-hint">流量日期表示下次重置，客户端可能显示为到期时间。</p>
-    </section>
+    <div class="field">
+      <label for="jms-bandwidth">JMS 流量 API 地址（可选）</label>
+      <input id="jms-bandwidth" v-model.trim="jmsBandwidth" type="password" autocomplete="off" spellcheck="false" @input="clearGeneratedResults" />
+      <span class="field-hint">单条 JMS 洛杉矶 Clash 订阅自动适配；填写 API 后附加用量和重置日期。请使用 Aethersailor 公共后端。生成链接包含原始地址，请妥善保管。</span>
+    </div>
 
     <div v-if="!isSubConverterExtended" class="field">
       <label for="subscription-urls">订阅链接或节点</label>
@@ -458,11 +444,8 @@ export default {
         shortUrl: '',
       },
       urls: '',
-      jmsSubscription: '',
       jmsBandwidth: '',
-      jmsAdmin: '',
-      jmsLink: '',
-      jmsLoading: false,
+      jmsUpstream: '',
       target: 'clash',
       remoteConfig: runtimeConfig.remoteConfigOptions[0]?.value || '',
       isShortUrlLoading: false,
@@ -590,31 +573,6 @@ export default {
     },
   },
   methods: {
-    async createJmsLink() {
-      this.clearFormMessage();
-      if (!this.jmsSubscription || !this.jmsBandwidth || !this.jmsAdmin) { this.setFormMessage('请填写订阅地址、流量 API 地址和管理密钥。'); return; }
-      this.jmsLoading = true;
-      try {
-        const response = await fetch('/jms/manage', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-JMS-Admin-Key': this.jmsAdmin }, body: JSON.stringify({ subscription: this.jmsSubscription, bandwidth: this.jmsBandwidth }) });
-        if (!response.ok) throw new Error(response.status === 403 ? '管理密钥不正确。' : response.status === 503 ? '服务尚未完成配置。' : '生成失败，请检查两个 JMS 地址。');
-        const data = await response.json();
-        if (!/^[a-f0-9]{64}$/.test(data.token)) throw new Error('服务返回的数据无效。');
-        this.jmsLink = `${window.location.origin}/jms/${data.token}`;
-        this.jmsSubscription = ''; this.jmsBandwidth = '';
-        await this.toCopy(this.jmsLink, 'JMS 订阅链接');
-      } catch (error) { this.setFormMessage(error.message); }
-      finally { this.jmsLoading = false; }
-    },
-    async deleteJmsLink() {
-      if (!this.jmsLink || !this.jmsAdmin || !window.confirm('撤销后该订阅链接将无法继续更新，确定撤销？')) return;
-      try {
-        const url = new URL(this.jmsLink);
-        if (url.origin !== window.location.origin || !/^\/jms\/[a-f0-9]{64}$/.test(url.pathname) || url.search || url.hash) throw new Error('请输入本站生成的 JMS 订阅链接。');
-        const response = await fetch(url.pathname, { method: 'DELETE', headers: { 'X-JMS-Admin-Key': this.jmsAdmin } });
-        if (!response.ok) throw new Error('撤销失败，请检查管理密钥。');
-        this.jmsLink = ''; showNotification('撤销请求已提交；缓存可能短暂延迟生效。', '成功');
-      } catch (error) { this.setFormMessage(error.message); }
-    },
     initBackendOptions() {
       this.backendOptions = this.runtimeConfig.apiBackends;
       if (this.backendOptions.length > 0) {
@@ -895,6 +853,26 @@ export default {
           moreConfig: this.moreConfig,
           backendType: this.backendType,
         });
+        this.jmsUpstream = '';
+        const candidates = this.isSubConverterExtended
+          ? this.sourceItems.map(item => String(item.url || '').trim()).filter(Boolean)
+          : this.urls.split(/\r?\n|\|/).map(item => item.trim()).filter(Boolean);
+        const isJms = value => { try { const u = new URL(value); return ['jmssub.net', 'jjsubmarines.com'].includes(u.hostname) && u.pathname === '/members/getsub.php'; } catch { return false; } };
+        const hasJms = candidates.some(isJms);
+        if (this.jmsBandwidth && (!hasJms || this.target !== 'clash')) throw new TypeError('流量 API 仅用于单条 JMS 洛杉矶 Clash 订阅。');
+        if (hasJms && this.target === 'clash') {
+          if (candidates.length !== 1) throw new TypeError('JMS 洛杉矶适配目前仅支持单条订阅。');
+          const source = new URL(candidates[0]);
+          if (source.searchParams.get('format') !== 'clash') throw new TypeError('请使用 JMS 的 Clash / Mihomo YAML 订阅地址。');
+          const upstream = new URL(this.result.subUrl);
+          if (upstream.origin !== 'https://api.asailor.org') throw new TypeError('JMS 洛杉矶适配请使用 Aethersailor 公共后端。');
+          upstream.searchParams.set('udp', 'true');
+          this.jmsUpstream = upstream.href;
+          const local = new URL('/jms/convert', window.location.origin);
+          local.searchParams.set('converter', upstream.href);
+          if (this.jmsBandwidth) local.searchParams.set('bandwidth', this.jmsBandwidth);
+          this.result.subUrl = local.href;
+        }
       } catch (error) {
         this.setFormMessage(error.message, 'urls');
         return false;
@@ -911,7 +889,7 @@ export default {
         return;
       }
       if (!this.getConverter()) return;
-      const diagnosticUrl = new URL(this.result.subUrl);
+      const diagnosticUrl = new URL(this.jmsUpstream || this.result.subUrl);
       diagnosticUrl.searchParams.set('explain', 'true');
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 15000);

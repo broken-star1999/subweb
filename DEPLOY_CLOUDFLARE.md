@@ -2,13 +2,13 @@
 
 本分支在上游 SubWeb 基础上增加了 JMS 洛杉矶适配。Cloudflare Pages 托管前端和 Pages Functions；普通转换仍由浏览器请求所选后端，JMS 适配请求则由本站 Functions 处理并调用 Aethersailor 公共后端。
 
-> 本指南描述当前开发分支，JMS 网页生成流程仍在测试。生产站点以实际部署的分支和提交为准。JMS 的 KV、管理密钥、安全边界和测试说明请阅读 [JMS-SETUP.md](JMS-SETUP.md)。
+> 本指南描述当前开发分支，JMS 网页生成流程仍在测试。生产站点以实际部署的分支和提交为准。JMS 输入方式、安全边界和测试说明请阅读 [JMS-SETUP.md](JMS-SETUP.md)。
 
 ## 部署边界
 
 - Cloudflare Pages 托管 Vue 静态资源。
 - `/conf/config.js` 用于读取公开的站点环境变量并生成前端配置；不要把敏感信息放入这些前端配置变量。
-- `/jms/*` 处理 JMS 配置创建、订阅生成、代理集拉取与撤销，涉及敏感地址和节点数据。普通转换与该入口分开。
+- `/jms/*` 处理 JMS 订阅生成，涉及敏感地址和节点数据。普通转换与该入口分开。
 - JMS 原始订阅地址会发送给 Aethersailor 公共后端；Bandwidth Counter API 由本站查询。生成的订阅链接也是凭据。
 - 短链接功能会把完整转换链接发送到单独配置的短链接服务，默认关闭。
 - Docker 部署仍受支持，但不是本指南的主要部署方式。
@@ -140,7 +140,7 @@ Pages 可以为同仓库分支和 Pull Request 创建独立预览部署。预览
 - 转换链接可能包含订阅凭据。不要把链接、诊断 JSON 或浏览器日志公开粘贴到 Issue。
 - SubConverter-Extended 诊断会立即把当前来源发送到所选后端，因此前端会在请求前确认。
 - Base64 是编码，不是加密。
-- JMS 地址由网页发送到本站并加密保存在 KV；订阅链接包含访问令牌，持有链接的人能获取节点。生成和撤销需要管理密钥，详见 [JMS-SETUP.md](JMS-SETUP.md)。
+- JMS 订阅链接参数包含原始地址，编码不是加密；本站不存储配置，也不能单独撤销链接。详见 [JMS-SETUP.md](JMS-SETUP.md)。
 - `provider_headers` 只填写 Header 名称。SubWeb 不收集或保存 Header 值。
 - 短链接服务会收到完整转换链接。只在信任该服务时启用。
 - 不要为绕过 CORS 而使用 Pages Function 代理任意后端。
