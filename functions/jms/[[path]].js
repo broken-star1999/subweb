@@ -115,7 +115,6 @@ export async function onRequest(context) {
   if (!['GET', 'HEAD', 'DELETE'].includes(request.method) || parts.length < 1 || parts.length > 2 || (parts[1] && parts[1] !== 'provider')) return new Response('Not found', { status: 404, headers: NO_STORE });
   if (!/^[a-f0-9]{64}$/.test(parts[0]) || !env.JMS_CONFIGS) return new Response('Not found', { status: 404, headers: NO_STORE });
   let stage = 'configuration';
-  let previewDetail = '';
   try {
     const id = await tokenId(parts[0]);
     if (request.method === 'DELETE') {
@@ -133,7 +132,7 @@ export async function onRequest(context) {
     const origin = new URL(request.url).origin;
     const providerUrl = `${origin}/jms/${encodeURIComponent(parts[0])}/provider`;
     if (parts[1] === 'provider') {
-      const result = await fetch(source.toString(), { redirect: 'error', headers: { 'User-Agent': 'clash-verge/v2.4.5' } });
+      const result = await fetch(source.toString(), { redirect: 'manual', headers: { 'User-Agent': 'clash-verge/v2.4.5' } });
       const body = await readLimited(result);
       return new Response(request.method === 'HEAD' ? null : body, { headers: { ...NO_STORE, 'Content-Type': 'text/yaml; charset=utf-8' } });
     }
@@ -141,12 +140,11 @@ export async function onRequest(context) {
     converter.search = new URLSearchParams({ target: 'clash', url: source.toString(), config: TEMPLATE, udp: 'true' }).toString();
     stage = 'upstream';
     const [converted, usage] = await Promise.allSettled([
-      fetch(converter.toString(), { redirect: 'error' }).then(r => readLimited(r)),
-      fetch(api.toString(), { redirect: 'error' }).then(r => readLimited(r, 16384)).then(JSON.parse),
+      fetch(converter.toString(), { redirect: 'manual' }).then(r => readLimited(r)),
+      fetch(api.toString(), { redirect: 'manual' }).then(r => readLimited(r, 16384)).then(JSON.parse),
     ]);
     if (converted.status !== 'fulfilled') {
       const message = converted.reason?.message || '';
-      previewDetail = String(message).replace(/https?:\/\/\S+/gi, '[URL]').replace(/[^a-zA-Z0-9 .:_-]/g, '').slice(0, 100);
       stage = /^upstream-http-\d{3}$/.test(message) ? message : 'upstream-network-or-body';
       throw new Error('conversion failed');
     }
@@ -164,6 +162,6 @@ export async function onRequest(context) {
     stage = 'serialize';
     return new Response(request.method === 'HEAD' ? null : dump(config, { noRefs: true, lineWidth: -1 }), { headers });
   } catch {
-    return new Response('JMS subscription temporarily unavailable', { status: 502, headers: env.JMS_PREVIEW_DIAGNOSTICS === 'true' ? { ...NO_STORE, 'X-JMS-Stage': stage, 'X-JMS-Debug': previewDetail } : NO_STORE });
+    return new Response('JMS subscription temporarily unavailable', { status: 502, headers: env.JMS_PREVIEW_DIAGNOSTICS === 'true' ? { ...NO_STORE, 'X-JMS-Stage': stage } : NO_STORE });
   }
 }
