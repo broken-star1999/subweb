@@ -43,7 +43,8 @@ function trusted(raw, hosts) {
 }
 
 async function readLimited(response, max = 1024 * 1024) {
-  if (!response.ok || !response.body) throw new Error('upstream failed');
+  if (!response.ok) throw new Error(`upstream-http-${response.status}`);
+  if (!response.body) throw new Error('upstream-empty');
   const reader = response.body.getReader();
   const parts = []; let length = 0;
   while (true) {
@@ -142,7 +143,11 @@ export async function onRequest(context) {
       fetch(converter.toString(), { redirect: 'error' }).then(r => readLimited(r)),
       fetch(api.toString(), { redirect: 'error' }).then(r => readLimited(r, 16384)).then(JSON.parse),
     ]);
-    if (converted.status !== 'fulfilled') throw new Error('conversion failed');
+    if (converted.status !== 'fulfilled') {
+      const message = converted.reason?.message || '';
+      stage = /^upstream-http-\d{3}$/.test(message) ? message : 'upstream-network-or-body';
+      throw new Error('conversion failed');
+    }
     stage = 'adapt';
     const config = adapt(load(converted.value), providerUrl);
     if (!Object.values(config['proxy-providers']).every(p => p.override?.udp === true)) throw new Error('UDP override missing');
