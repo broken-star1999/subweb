@@ -16,6 +16,14 @@
 
 ---
 
+> **本分支：JMS 洛杉矶适配实验版**
+>
+> 本仓库基于 [Aethersailor/subweb](https://github.com/Aethersailor/subweb) 开发。`main` 保持上游版本，JMS 功能目前只在 `codex/jms-la-adapter` 分支。实验版尚未在 Cloudflare、OpenClash 或 FlClash 完成真实订阅验收，请勿视为已部署的正式服务。原项目链接和演示站属于上游，不是本 fork 的部署地址。
+>
+> 实验版保留原版转换页面，并新增基于公共转换后端的 JMS 洛杉矶分组适配和流量表头。原始订阅地址会发送到 Aethersailor 公共后端；流量 API 和令牌通过 Cloudflare Secret 配置。配置方法、安全边界及当前限制见 [JMS-SETUP.md](JMS-SETUP.md)。
+
+---
+
 ## 📖 项目简介
 
 SubWeb 是一个轻量的 **Vue 3** [subconverter](https://github.com/tindy2013/subconverter) 前端，帮助用户生成 Clash、Surge、Quantumult X 等客户端的订阅链接。
